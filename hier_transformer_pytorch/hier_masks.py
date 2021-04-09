@@ -9,13 +9,17 @@ file that should have been included as part of this package.
 
 import torch
 
+
 # The dimensions and order of axes needs to be LxS for all masks.
 # Pytorch transformer.py expects attn_masks to be LxS
 # where L is the target sequence length, S is the source sequence length
-def _gen_mask_hierarchical(A):
-    # A: (bs, 100, 100); 100 is max_len*2 same as input_ids
-    return ~(2 * A == (A + A.transpose(1, 2))).bool()
 
+def gen_encoder_ut_mask(src_seq, input_mask, utt_loc):
+    def _gen_mask_hierarchical(A, src_pad_mask):
+        # A: (bs, 100, 100); 100 is max_len*2 same as input_ids
+        return ~(2 * A == (A + A.transpose(1, 2))).bool()
+    enc_mask_utt = _gen_mask_hierarchical(utt_loc.unsqueeze(1).expand(-1, src_seq.shape[1], -1), input_mask)
+    return enc_mask_utt
 
 def _get_pe_inputs(tgt_seq, src_seq, input_mask, utt_loc):
     pe_utt_loc = torch.zeros(utt_loc.shape, device=utt_loc.device)
@@ -30,12 +34,12 @@ def _HIER_masks(tgt_seq, src_seq, input_mask, utt_loc):
     pe_utt_loc = _get_pe_inputs(tgt_seq, src_seq, input_mask, utt_loc)
 
     # UT-MASK
-    enc_mask_utt = _gen_mask_hierarchical(utt_loc.unsqueeze(1).expand(-1, src_seq.shape[1], -1))
+    enc_mask_utt = gen_encoder_ut_mask(src_seq, input_mask, utt_loc)
 
     # CT-Mask HIER style
     # Note: The sequence is all utterance followed by kb entries
     # We attend to the final *utterance*
-    _x = (utt_loc == (utt_loc.max(1, keepdim=True).values - 1)).unsqueeze(1)
+    _x = (utt_loc == (utt_loc.max(1, keepdim=True).values)).unsqueeze(1)
     final_utt_check = _x.expand(-1, src_seq.shape[1], -1)
     #     print(utt_loc[0:5])
     #     print(final_utt_check[0:5, 0, :]*1)
@@ -46,26 +50,6 @@ def _HIER_masks(tgt_seq, src_seq, input_mask, utt_loc):
     # dec_enc_attn_mask = input_mask.unsqueeze(1).expand(-1, tgt_seq.shape[1], -1)
     dec_enc_attn_mask = (~_x).expand(-1, tgt_seq.shape[1], -1)
     # print(dec_enc_attn_mask.shape)
-
-    # Uncomment this for plotting masks
-    '''
-    import seaborn as sns
-    import matplotlib.pyplot as plt    
-    print(input_mask[0])
-    print("===============>")
-    print(utt_loc[0])
-    print((1 - input_mask[0]*1.)*utt_loc[0])
-    sns.set_style("whitegrid")
-    sns.heatmap((input_mask[0]).unsqueeze(0).expand(tgt_seq.shape[1], -1).cpu().numpy()).set_title("Input_Pad_mask")
-    plt.show()
-    sns.heatmap((enc_mask_utt[0]*1).cpu().numpy()).set_title("UT_Mask")
-    plt.show()
-    sns.heatmap((enc_mask_ct[0]*1).cpu().numpy()).set_title("CT_Mask")
-    plt.show()
-    sns.heatmap((dec_enc_attn_mask[0]*1).cpu().numpy()).set_title("Dec_2_Enc_Mask")
-    plt.show()
-    raise Exception("Good for you!")
-    '''
     return pe_utt_loc, enc_mask_utt, enc_mask_ct, dec_enc_attn_mask
 
 
@@ -74,13 +58,13 @@ def _CLS_masks(tgt_seq, src_seq, input_mask, utt_loc):
     pe_utt_loc = _get_pe_inputs(tgt_seq, src_seq, input_mask, utt_loc)
 
     # UT-MASK
-    enc_mask_utt = _gen_mask_hierarchical(utt_loc.unsqueeze(1).expand(-1, src_seq.shape[1], -1))
+    enc_mask_utt = gen_encoder_ut_mask(src_seq, input_mask, utt_loc)
 
     # CT-MASK
-    enc_mask_ct = (pe_utt_loc != 0).unsqueeze(1).expand(-1, src_seq.shape[1], -1)  # HIER-CLS style
+    enc_mask_ct = ((pe_utt_loc + input_mask) != 0).unsqueeze(1).expand(-1, src_seq.shape[1], -1)  # HIER-CLS style
 
     # For HIER-CLS style
-    dec_enc_attn_mask = (pe_utt_loc != 0).unsqueeze(1).expand(-1, tgt_seq.shape[1], -1)
+    dec_enc_attn_mask = ((pe_utt_loc + input_mask) != 0).unsqueeze(1).expand(-1, tgt_seq.shape[1], -1)
 
     return pe_utt_loc, enc_mask_utt, enc_mask_ct, dec_enc_attn_mask
 
@@ -91,7 +75,7 @@ def _FULL_masks(tgt_seq, src_seq, input_mask, utt_loc):
 
     # UT-MASK
     # enc_mask = input_mask.unsqueeze(1).expand(-1, src_seq.shape[1], -1)
-    enc_mask_utt = _gen_mask_hierarchical(utt_loc.unsqueeze(1).expand(-1, src_seq.shape[1], -1))
+    enc_mask_utt = gen_encoder_ut_mask(src_seq, input_mask, utt_loc)
 
     # CT-MASK
     enc_mask_ct = input_mask.unsqueeze(1).expand(-1, src_seq.shape[1], -1)
@@ -99,3 +83,21 @@ def _FULL_masks(tgt_seq, src_seq, input_mask, utt_loc):
     dec_enc_attn_mask = input_mask.unsqueeze(1).expand(-1, tgt_seq.shape[1], -1)
 
     return pe_utt_loc, enc_mask_utt, enc_mask_ct, dec_enc_attn_mask
+
+
+def get_hier_encoder_mask(tgt_seq, src_seq, input_mask, utt_loc, type:str):
+    # Padding correction
+    # No token other than padding should attend to padding
+    # But padding needs to attend to padding tokens for numerical stability reasons
+    utt_loc = utt_loc - 2 * input_mask * utt_loc
+
+    assert type in ["hier", "cls", "full"]
+
+    if type == "hier": # HIER: Context through final utterance
+        return _HIER_masks(tgt_seq, src_seq, input_mask, utt_loc)
+    elif type == "cls": # HIER-CLS: Context through cls tokens
+        return _CLS_masks(tgt_seq, src_seq, input_mask, utt_loc)
+    elif type == "full": # Ut-mask only, CT-mask: Full attention
+        return _FULL_masks(tgt_seq, src_seq, input_mask, utt_loc)
+
+    return None
