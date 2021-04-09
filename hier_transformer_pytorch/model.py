@@ -133,7 +133,7 @@ class HIERTransformer(Module):
         for i, layer in enumerate(self.enc_layers):
             if i == self.num_layers_e // 2:
                 # Positional Embedding for Context Encoder
-                enc_inp = enc_inp + self.post_word_emb(enc_inp)
+                enc_inp = enc_inp + self.post_word_emb(enc_inp.transpose(0, 1)).transpose(0, 1)
             if i < self.num_layers_e//2:
                 enc_inp = layer(enc_inp,
                                    src_key_padding_mask=src_key_padding_mask,
@@ -189,6 +189,7 @@ class PositionalEmbedding(torch.nn.Module):
         self.register_buffer('pe', pe)
 
     def forward(self, x):
+        # Shape of X : [N x L x d] or [N x L]
         return self.pe[:, :x.size(1)]
 
     def forward_by_index(self, loc):

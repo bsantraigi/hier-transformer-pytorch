@@ -1,6 +1,5 @@
 import torch
-from hier_transformer_pytorch import HIERTransformer
-import hier_transformer_pytorch as HIER
+from hier_transformer_pytorch import HIERTransformer, get_hier_encoder_mask
 
 # Model
 hier_transformer = HIERTransformer(nhead=16, num_encoder_layers=12, vocab_size=1000)
@@ -34,7 +33,7 @@ src_padding_mask = torch.tensor([0, 0, 0, 0, 0, 0, 0, 1, 1, 1]).unsqueeze(0).exp
 utt_indices = torch.tensor([0, 0, 1, 1, 1, 2, 2, 3, 3, 3]).unsqueeze(0).expand(32, -1)
 
 # HIER-CLS
-pe_utt_loc, enc_mask_utt, enc_mask_ct, dec_enc_attn_mask = HIER.hier_masks.get_hier_encoder_mask(tgt, src, src_padding_mask, utt_indices, type="cls")
+pe_utt_loc, enc_mask_utt, enc_mask_ct, dec_enc_attn_mask = get_hier_encoder_mask(tgt, src, src_padding_mask, utt_indices, type="cls")
 
 sns.set_style("whitegrid")
 fig, axes = plt.subplots(2, 2, figsize=(10, 8))
@@ -45,7 +44,7 @@ sns.heatmap((enc_mask_ct[0] * 1).cpu().numpy(), ax=axes[1,0]).set_title("CT_Mask
 sns.heatmap((dec_enc_attn_mask[0] * 1).cpu().numpy(), ax=axes[1,1]).set_title("Dec_2_Enc_Mask")
 
 # HIER
-pe_utt_loc, enc_mask_utt, enc_mask_ct, dec_enc_attn_mask = HIER.get_hier_encoder_mask(tgt, src, src_padding_mask, utt_indices, type="hier")
+pe_utt_loc, enc_mask_utt, enc_mask_ct, dec_enc_attn_mask = get_hier_encoder_mask(tgt, src, src_padding_mask, utt_indices, type="hier")
 
 sns.set_style("whitegrid")
 fig, axes = plt.subplots(2, 2, figsize=(10, 8))
@@ -56,7 +55,7 @@ sns.heatmap((enc_mask_ct[0] * 1).cpu().numpy(), ax=axes[1,0]).set_title("CT_Mask
 sns.heatmap((dec_enc_attn_mask[0] * 1).cpu().numpy(), ax=axes[1,1]).set_title("Dec_2_Enc_Mask")
 
 # UT-Mask only
-pe_utt_loc, enc_mask_utt, enc_mask_ct, dec_enc_attn_mask = HIER.get_hier_encoder_mask(tgt, src, src_padding_mask, utt_indices, type="full")
+pe_utt_loc, enc_mask_utt, enc_mask_ct, dec_enc_attn_mask = get_hier_encoder_mask(tgt, src, src_padding_mask, utt_indices, type="full")
 
 sns.set_style("whitegrid")
 fig, axes = plt.subplots(2, 2, figsize=(10, 8))
@@ -67,5 +66,5 @@ sns.heatmap((enc_mask_ct[0] * 1).cpu().numpy(), ax=axes[1,0]).set_title("CT_Mask
 sns.heatmap((dec_enc_attn_mask[0] * 1).cpu().numpy(), ax=axes[1,1]).set_title("Dec_2_Enc_Mask")
 
 fig = plt.figure()
-sns.heatmap((pe_utt_loc * 1).cpu().numpy()).set_title("PosEnc for UT-Enc")
+sns.heatmap((pe_utt_loc * 1).cpu().numpy()).set_title("Position Indices for UT-Enc")
 plt.show()
