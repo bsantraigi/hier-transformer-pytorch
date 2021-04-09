@@ -1,4 +1,5 @@
 import copy
+import math
 from typing import Optional, Any
 
 import torch
@@ -11,6 +12,8 @@ from torch.nn.init import xavier_uniform_
 from torch.nn.modules.dropout import Dropout
 from torch.nn.modules.linear import Linear
 from torch.nn.modules.normalization import LayerNorm
+
+from .hier_masks import get_hier_encoder_mask
 
 
 class HIERTransformer(Module):
@@ -41,33 +44,37 @@ class HIERTransformer(Module):
     """
 
     def __init__(self, d_model: int = 512, nhead: int = 8, num_encoder_layers: int = 6,
-                 num_decoder_layers: int = 6, dim_feedforward: int = 2048, dropout: float = 0.1,
+                 num_decoder_layers: int = 6, d_word_vec: int = 512, dim_feedforward: int = 2048, dropout: float = 0.1,
                  activation: str = "relu", custom_encoder: Optional[Any] = None, custom_decoder: Optional[Any] = None,
-                 layer_norm_eps: float = 1e-5) -> None:
+                 layer_norm_eps: float = 1e-5, vocab_size: int = 2, pad_index: int = 0) -> None:
         super(HIERTransformer, self).__init__()
 
-        if custom_encoder is not None:
-            self.encoder = custom_encoder
-        else:
-            encoder_layer = TransformerEncoderLayer(d_model, nhead, dim_feedforward, dropout, activation, layer_norm_eps)
-            encoder_norm = LayerNorm(d_model, eps=layer_norm_eps)
-            self.encoder = TransformerEncoder(encoder_layer, num_encoder_layers, encoder_norm)
+        # Word Emb
+        self.word_emb = torch.nn.Embedding(vocab_size, d_word_vec, padding_idx=pad_index)
 
-        if custom_decoder is not None:
-            self.decoder = custom_decoder
-        else:
-            decoder_layer = TransformerDecoderLayer(d_model, nhead, dim_feedforward, dropout, activation, layer_norm_eps)
-            decoder_norm = LayerNorm(d_model, eps=layer_norm_eps)
-            self.decoder = TransformerDecoder(decoder_layer, num_decoder_layers, decoder_norm)
+        # Pos Emb
+        self.post_word_emb = PositionalEmbedding(d_model=d_word_vec)
+
+        # Encoder
+        encoder_layer = TransformerEncoderLayer(d_model, nhead, dim_feedforward, dropout, activation, layer_norm_eps)
+        encoder_norm = LayerNorm(d_model, eps=layer_norm_eps)
+        self.enc_layers = _get_clones(encoder_layer, num_encoder_layers)
+        self.num_layers_e = num_encoder_layers
+        self.norm_e = encoder_norm
+
+        # Decoder
+        decoder_layer = TransformerDecoderLayer(d_model, nhead, dim_feedforward, dropout, activation, layer_norm_eps)
+        decoder_norm = LayerNorm(d_model, eps=layer_norm_eps)
+        self.decoder = TransformerDecoder(decoder_layer, num_decoder_layers, decoder_norm)
 
         self._reset_parameters()
 
         self.d_model = d_model
         self.nhead = nhead
 
-    def forward(self, src: Tensor, tgt: Tensor, src_mask: Optional[Tensor] = None, tgt_mask: Optional[Tensor] = None,
-                memory_mask: Optional[Tensor] = None, src_key_padding_mask: Optional[Tensor] = None,
-                tgt_key_padding_mask: Optional[Tensor] = None, memory_key_padding_mask: Optional[Tensor] = None) -> Tensor:
+    def forward(self, src: Tensor, tgt: Tensor, utt_indices: Optional[Tensor] = None, tgt_mask: Optional[Tensor] = None,
+                src_key_padding_mask: Optional[Tensor] = None, tgt_key_padding_mask: Optional[Tensor] = None,
+                memory_key_padding_mask: Optional[Tensor] = None) -> Tensor:
         r"""Take in and process masked source/target sequences.
         Args:
             src: the sequence to the encoder (required).
@@ -109,11 +116,40 @@ class HIERTransformer(Module):
         if src.size(1) != tgt.size(1):
             raise RuntimeError("the batch number of src and tgt must be equal")
 
-        if src.size(2) != self.d_model or tgt.size(2) != self.d_model:
-            raise RuntimeError("the feature number of src and tgt must be equal to d_model")
+        # if src.size(2) != self.d_model or tgt.size(2) != self.d_model:
+        #     raise RuntimeError("the feature number of src and tgt must be equal to d_model")
 
-        memory = self.encoder(src, mask=src_mask, src_key_padding_mask=src_key_padding_mask)
-        output = self.decoder(tgt, memory, tgt_mask=tgt_mask, memory_mask=memory_mask,
+        pe_utt_loc, enc_mask_utt, enc_mask_ct, dec_enc_attn_mask = get_hier_encoder_mask(tgt.transpose(0,1),
+                                                                                         src.transpose(0,1),
+                                                                                         src_key_padding_mask,
+                                                                                         utt_indices,
+                                                                                         type="cls")
+        # memory = self.encoder(src, mask=src_mask, src_key_padding_mask=src_key_padding_mask)
+
+        # Encoding
+        # memory = src
+        enc_inp = self.word_emb(src) + self.post_word_emb.forward_by_index(pe_utt_loc).transpose(0,1)
+
+        for i, layer in enumerate(self.enc_layers):
+            if i == self.num_layers_e // 2:
+                # Positional Embedding for Context Encoder
+                enc_inp = enc_inp + self.post_word_emb(enc_inp)
+            if i < self.num_layers_e//2:
+                enc_inp = layer(enc_inp,
+                                   src_key_padding_mask=src_key_padding_mask,
+                                   src_mask=enc_mask_utt)
+            else:
+                enc_inp = layer(enc_inp,
+                                   src_key_padding_mask=src_key_padding_mask,
+                                   src_mask=enc_mask_ct)
+
+        if self.norm_e is not None:
+            enc_inp = self.norm_e(enc_inp)
+        memory = enc_inp
+
+        # Decoding
+        tgt = self.word_emb(tgt) + self.post_word_emb(tgt.transpose(0, 1)).transpose(0, 1)
+        output = self.decoder(tgt, memory, tgt_mask=tgt_mask, memory_mask=dec_enc_attn_mask,
                               tgt_key_padding_mask=tgt_key_padding_mask,
                               memory_key_padding_mask=memory_key_padding_mask)
         return output
@@ -132,6 +168,31 @@ class HIERTransformer(Module):
         for p in self.parameters():
             if p.dim() > 1:
                 xavier_uniform_(p)
+
+
+class PositionalEmbedding(torch.nn.Module):
+
+    def __init__(self, d_model, max_len=512):
+        super().__init__()
+
+        # Compute the positional encodings once in log space.
+        pe = torch.zeros(max_len, d_model).float()
+        pe.require_grad = False
+
+        position = torch.arange(0, max_len).float().unsqueeze(1)
+        div_term = (torch.arange(0, d_model, 2).float() * -(math.log(10000.0) / d_model)).exp()
+
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+
+        pe = pe.unsqueeze(0)
+        self.register_buffer('pe', pe)
+
+    def forward(self, x):
+        return self.pe[:, :x.size(1)]
+
+    def forward_by_index(self, loc):
+        return self.pe.expand(loc.shape[0], -1, -1).gather(1, loc.unsqueeze(2).expand(-1, -1, self.pe.shape[2]).long())
 
 
 class TransformerEncoder(Module):
@@ -271,6 +332,7 @@ class TransformerEncoderLayer(Module):
         Shape:
             see the docs in Transformer class.
         """
+        src_mask = src_mask.repeat(self.self_attn.num_heads, 1, 1)
         src2 = self.self_attn(src, src, src, attn_mask=src_mask,
                               key_padding_mask=src_key_padding_mask)[0]
         src = src + self.dropout1(src2)
@@ -338,6 +400,7 @@ class TransformerDecoderLayer(Module):
         Shape:
             see the docs in Transformer class.
         """
+        memory_mask = memory_mask.repeat(self.self_attn.num_heads, 1, 1)
         tgt2 = self.self_attn(tgt, tgt, tgt, attn_mask=tgt_mask,
                               key_padding_mask=tgt_key_padding_mask)[0]
         tgt = tgt + self.dropout1(tgt2)

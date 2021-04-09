@@ -91,6 +91,7 @@ def get_hier_encoder_mask(tgt_seq, src_seq, input_mask, utt_loc, type:str):
     # But padding needs to attend to padding tokens for numerical stability reasons
     utt_loc = utt_loc - 2 * input_mask * utt_loc
 
+    # CT-Mask type
     assert type in ["hier", "cls", "full"]
 
     if type == "hier": # HIER: Context through final utterance

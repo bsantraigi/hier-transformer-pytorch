@@ -1,2 +1,2 @@
 from .model import HIERTransformer
-from . import hier_masks
+from .hier_masks import get_hier_encoder_mask
