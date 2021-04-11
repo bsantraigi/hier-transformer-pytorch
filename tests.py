@@ -11,10 +11,12 @@ src_padding_mask = torch.tensor([0, 0, 0, 0, 0, 0, 0, 1, 1, 1]).unsqueeze(0).exp
 utt_indices = torch.tensor([0, 0, 1, 1, 1, 2, 2, 3, 3, 3]).unsqueeze(0).expand(32, -1)
 
 # forward
-out = hier_transformer.forward(src, tgt, utt_indices=utt_indices, src_key_padding_mask=src_padding_mask)
+out = hier_transformer.forward(src, tgt, utt_indices=utt_indices, ct_mask_type="cls", src_key_padding_mask=src_padding_mask)
 
 print(f"src: {src.shape}, tgt: {tgt.shape} -> out: {out.shape}")
 # print(out)
+
+exit(0)
 
 """CT Masks
 

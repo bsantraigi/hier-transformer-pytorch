@@ -17,7 +17,7 @@ Implementation of <a href="https://arxiv.org/abs/2011.08067">HIER</a>, in Pytorc
 Coming soon...
 ```
 
-## Usage
+## Usage [`python tests.py`]
 
 ```python
 import torch
@@ -39,12 +39,16 @@ print(f"src: {src.shape}, tgt: {tgt.shape} -> out: {out.shape}")
 # Output: src: torch.Size([10, 32]), tgt: torch.Size([20, 32]) -> out: torch.Size([20, 32, 512])
 ```
 
-### Or run `python tests.py`
+## Designing UT-Mask and CT-Mask(s)
 
-> Padding is attended by padding to prevent `inf` output from softmax 
-> function in attention. Otherwise we will have a situation like 
-> `softmax([-inf, -inf, ..., -inf])`. CT-Mask should be designed in a way to make 
-> sure that we don't attend to padding indices.
+**TIPS:**
+1. Padding is attended by padding to prevent `nan` output from softmax function in attention. 
+ Otherwise we will have a situation like `softmax([-inf, -inf, ..., -inf])` (the undefined 
+ 0/0 situation).
+2. There should be no row with all ones, as this would imply that the corresponding token not attending to 
+ anything from previous layers. This will cause numerical instability as described above.
+3. Also, UT-Mask and CT-Mask should be designed in a way to make sure that a valid content token isn't attending
+ to padding indices.
 
 ![hier](./plot_hier.png)
 ![hier-cls](./plot_hier_cls.png)

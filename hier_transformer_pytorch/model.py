@@ -72,7 +72,7 @@ class HIERTransformer(Module):
         self.d_model = d_model
         self.nhead = nhead
 
-    def forward(self, src: Tensor, tgt: Tensor, utt_indices: Optional[Tensor] = None, tgt_mask: Optional[Tensor] = None,
+    def forward(self, src: Tensor, tgt: Tensor, utt_indices: Optional[Tensor] = None, ct_mask_type: str = "cls", tgt_mask: Optional[Tensor] = None,
                 src_key_padding_mask: Optional[Tensor] = None, tgt_key_padding_mask: Optional[Tensor] = None,
                 memory_key_padding_mask: Optional[Tensor] = None) -> Tensor:
         r"""Take in and process masked source/target sequences.
@@ -123,7 +123,7 @@ class HIERTransformer(Module):
                                                                                          src.transpose(0,1),
                                                                                          src_key_padding_mask,
                                                                                          utt_indices,
-                                                                                         type="cls")
+                                                                                         type=ct_mask_type)
         # memory = self.encoder(src, mask=src_mask, src_key_padding_mask=src_key_padding_mask)
 
         # Encoding
